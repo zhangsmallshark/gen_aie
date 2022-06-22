@@ -4,21 +4,8 @@ from scipy.sparse import csr_matrix
 import random
 import math
 
-
-def add_val(s_mat):
-    rows, cols = s_mat.shape
-    for i in range(rows):
-        sub_mat = s_mat[i]
-        sub_max = np.amax(sub_mat)
-        if sub_max == 0:
-            col = random.randint(0, cols - 1)
-            s_mat[i][col] = 1.0
-
-    density = np.sum(s_mat) / (rows * cols)
-    print(f'density in add_val is {density} !!!')
-
-
-def gen_random_mat_a(rows, cols, density):
+# random distribution
+def gen_random_mat_a0(rows, cols, density):
     total_num = rows * cols
     nnz = int(density * total_num)
     z = total_num - nnz
@@ -28,16 +15,10 @@ def gen_random_mat_a(rows, cols, density):
     np.random.shuffle(arr0)
     mat_a = np.reshape(arr0, (rows, cols))
 
-    # mat_a = np.random.randint(0, 2, size=(rows, cols))
-    # eye_mat = np.eys(rows, cols, dtype=np.float32)
-    # f_mat_a = np.dot(mat_a, eye_mat)
-
-    # rng = np.random.default_rng()
-    # rvs = sci.stats.poisson(25, loc=10).rvs
-    # mat_a = sci.sparse.random(16, 8, density=0.1, random_state=rng, data_rvs=rvs)
     return mat_a
 
 
+# the same nnzs per row
 def gen_random_mat_a1(rows, cols, density):
     nnz_per_row = int(cols * density)
     if nnz_per_row == 0:
@@ -45,28 +26,31 @@ def gen_random_mat_a1(rows, cols, density):
 
     arr0 = np.zeros((rows, cols), dtype=np.float32)
     for i in range(rows):
-        # indices = np.random.randint(0, cols, size=nnz_per_row).tolist()
         indices = np.random.choice(cols, size=nnz_per_row, replace=False)
         for j in indices:
             arr0[i][j] = 1.0
 
-    # sum_c = np.sum(arr0, axis=1)
     # print(f'nnz_per_row is {nnz_per_row} !!!')
+    # print(f'ori density is {density} !!!')
     return arr0
 
 
+# specify nnz per row
 def gen_random_mat_a2(nnz_rows, cols):
     rows = len(nnz_rows)
     arr0 = np.zeros((rows, cols), dtype=np.float32)
     for i in range(rows):
         nnz_row_i = nnz_rows[i]
+        if nnz_row_i == 0:
+            continue
+        
         indices = np.random.choice(cols, size=nnz_row_i, replace=False)
         for j in indices:
             arr0[i][j] = 1.0
 
-    nnzs = int(np.sum(arr0))
-    print(f'density is {nnzs / (rows * cols)} !!!')
-    return [nnzs], arr0
+    # nnzs = int(np.sum(arr0))
+    # print(f'ori density is {nnzs / (rows * cols)} !!!')
+    return arr0
 
 
 def gen_random_mat_b(rows, cols):
@@ -92,147 +76,6 @@ def gen_p_mat_c(mat_a, mat_b, tile_size_a, tile_size_b, cycle, row_PE, file_name
 
     p_mat_c = gen_mat_c(mat_a[s_r_a:e_r_a, s_c_a:e_c_a], mat_b[s_r_b:e_r_b, s_c_b:e_c_b])
     write_mat_file1(file_name, 'w', p_mat_c, 1)
-
-
-def unroll_loop0(file_name, s_mat):
-    csr = csr_matrix(s_mat)
-    ind_ptr = csr.indptr.tolist()
-    len_i = len(ind_ptr) - 1
-    left_brace = '{'
-    right_brace = '}'
-
-    f = open(file_name, 'w')
-    out_loop = 1
-    f.write(f'for (unsigned int i = 0; i < {out_loop}; i++)\n')
-    f.write('chess_prepare_for_pipelining\n')
-    f.write(f'chess_loop_range({out_loop},)\n')
-    f.write(f'{left_brace}\n')
-    for i in range(len_i):
-        nnz_row_i = ind_ptr[i + 1] - ind_ptr[i]
-
-        f.write('  window_decr_v8(matB, row_idx1_b);\n')
-        f.write('  row_idx0_b = 0;\n')
-        f.write('  acc0 = null_v8float();\n')
-        f.write(f'  for (int8_t j = 0; j < {nnz_row_i}; j++)\n')
-        f.write('  chess_prepare_for_pipelining\n')
-        f.write(f'  chess_loop_range({nnz_row_i},)\n')
-        f.write(f'  {left_brace}\n')
-        f.write('    val = window_readincr(matA);\n')
-        f.write('    buf_mat_a = upd_elem(buf_mat_a, 0, val);\n')
-        f.write('    row_idx1_b = window_readincr(indices);\n')
-        f.write('    row_idx_diff = row_idx1_b - row_idx0_b;\n')
-        f.write('    row_idx0_b = row_idx1_b;\n')
-        f.write('    window_incr_v8(matB, row_idx_diff);\n')
-        f.write('    buf_mat_b = window_read_v8(matB);\n')
-        f.write('    acc0 = fpmac(acc0, buf_mat_a, 0, 0x00000000, buf_mat_b, 0, 0x76543210);\n')
-        f.write(f'  {right_brace}\n')
-        f.write('  window_writeincr(matC, acc0);\n\n')
-
-    f.write(f'{right_brace}\n')
-
-
-def unroll_loop1(file_name, s_mat):
-    csr = csr_matrix(s_mat)
-    ind_ptr = csr.indptr.tolist()
-    len_i = len(ind_ptr) - 1
-    left_brace = '{'
-    right_brace = '}'
-
-    f = open(file_name, 'w')
-    out_loop = 1
-    f.write(f'for (unsigned int i = 0; i < {out_loop}; i++)\n')
-    f.write('chess_prepare_for_pipelining\n')
-    f.write(f'chess_loop_range({out_loop},)\n')
-    f.write(f'{left_brace}\n')
-    for i in range(len_i):
-        nnz_row_i = ind_ptr[i + 1] - ind_ptr[i]
-
-        f.write('  window_decr_v8(matB, row_idx1_b);\n')
-        f.write('  row_idx0_b = 0;\n')
-        f.write('  acc0 = null_v8float();\n')
-        for j in range(nnz_row_i):
-            f.write('  val = window_readincr(matA);\n')
-            f.write('  buf_mat_a = upd_elem(buf_mat_a, 0, val);\n')
-            f.write('  row_idx1_b = window_readincr(indices);\n')
-            f.write('  row_idx_diff = row_idx1_b - row_idx0_b;\n')
-            f.write('  row_idx0_b = row_idx1_b;\n')
-            f.write('  window_incr_v8(matB, row_idx_diff);\n')
-            f.write('  buf_mat_b = window_read_v8(matB);\n')
-            f.write('  acc0 = fpmac(acc0, buf_mat_a, 0, 0x00000000, buf_mat_b, 0, 0x76543210);\n')
-
-        f.write('  window_writeincr(matC, acc0);\n\n')
-
-    f.write(f'{right_brace}\n')
-
-
-def unroll_loop2(file_name, s_mat):
-    csr = csr_matrix(s_mat)
-    ind_ptr = csr.indptr.tolist()
-    len_i = len(ind_ptr) - 1
-    nnz_per_row = []
-    for i in range(len_i):
-        nnz_row_i = ind_ptr[i + 1] - ind_ptr[i]
-        nnz_per_row.append(nnz_row_i)
-
-    num_par = 16
-    ave_row_per_par = int(len(nnz_per_row) / num_par)
-    par_dic = {}
-    idx_par = -1
-    max0 = 1024
-    max_vals = []
-    for i in range(0, len_i, ave_row_per_par):
-        max1 = max(nnz_per_row[i:i + ave_row_per_par])
-        max_vals.append(max1)
-        if -2 <= max1 - max0 <= 0:
-            par_dic[idx_par][2] += ave_row_per_par
-        else:
-            idx_par += 1
-            par_dic[idx_par] = [max1, i, ave_row_per_par]
-            max0 = max1
-
-    max_str = [str(m) for m in max_vals]
-    max_str = ', '.join(max_str)
-    print(f'max nnz is: {max_str}')
-
-    left_brace = '{'
-    right_brace = '}'
-    space = ' '
-    f = open(file_name, 'w')
-    out_loop = 1
-    f.write(f'for (unsigned int i = 0; i < {out_loop}; i++)\n')
-    f.write('chess_prepare_for_pipelining\n')
-    f.write(f'chess_loop_range({out_loop},)\n')
-    f.write(f'{left_brace}\n')
-    for p in par_dic.keys():
-        p_val = par_dic[p]
-        loop0 = p_val[2]
-        loop1 = p_val[0]
-        f.write(f'{space * 2}for (unsigned int j = 0; j < {loop0}; j++)\n')
-        f.write(f'{space * 2}chess_prepare_for_pipelining\n')
-        f.write(f'{space * 2}chess_loop_range({loop0},)\n')
-        f.write(f'{space * 2}{left_brace}\n')
-        f.write(f'{space * 4}window_decr_v8(matB, row_idx1_b);\n')
-        f.write(f'{space * 4}row_idx0_b = 0;\n')
-        f.write(f'{space * 4}acc0 = null_v8float();\n')
-        f.write(f'{space * 4}for (int8_t k = 0; k < {loop1}; k++)\n')
-        f.write(f'{space * 4}chess_prepare_for_pipelining\n')
-        f.write(f'{space * 4}chess_loop_range({loop1},)\n')
-        f.write(f'{space * 4}{left_brace}\n')
-        f.write(f'{space * 6}val = window_readincr(matA);\n')
-        f.write(f'{space * 6}buf_mat_a = upd_elem(buf_mat_a, 0, val);\n')
-        f.write(f'{space * 6}row_idx1_b = window_readincr(indices);\n')
-        f.write(f'{space * 6}row_idx_diff = row_idx1_b - row_idx0_b;\n')
-        f.write(f'{space * 6}row_idx0_b = row_idx1_b;\n')
-        f.write(f'{space * 6}window_incr_v8(matB, row_idx_diff);\n')
-        f.write(f'{space * 6}buf_mat_b = window_read_v8(matB);\n')
-        f.write(f'{space * 6}acc0 = fpmac(acc0, buf_mat_a, 0, 0x00000000, buf_mat_b, 0, 0x76543210);\n')
-        f.write(f'{space * 4}{right_brace}\n')
-        f.write(f'{space * 4}window_writeincr(matC, acc0);\n')
-        f.write(f'{space * 2}{right_brace}\n\n')
-
-    f.write(f'{right_brace}\n')
-
-    return par_dic
 
 
 def write_mat_file0(file_name, s_mat, iteration):
@@ -271,7 +114,7 @@ def write_mat_file0(file_name, s_mat, iteration):
     else:
         n_len = total_num
 
-    f1 = open('./mat/indices.txt', 'w')
+    f1 = open('./refer_mat/indices.txt', 'w')
     for i in range(iteration):
         for j in range(0, n_len, num_per_row):
             if j != 0:
@@ -405,7 +248,7 @@ def write_mat_file2(file_name, s_mat, par_dic, iteration):
         n_len = total_num
 
     f0 = open(file_name, 'w')
-    f1 = open('./mat/indices.txt', 'w')
+    f1 = open('./refer_mat/indices.txt', 'w')
     for i in range(iteration):
         for j in range(0, n_len, 2):
             if j + 1 < total_num:
@@ -479,18 +322,21 @@ def write_mat_file_ind_d1(s_mat, par_dic, w, ind_name, data_name):
     ind_ptr = csr.indptr.tolist()
     indices0 = csr.indices.tolist()
 
-    len_i = len(ind_ptr) - 1
+    rows = len(ind_ptr) - 1
     idx_par = 0
     r_e = 0
     max0 = 0
     indices1 = []
     data = []
-    for i in range(len_i):
+    for i in range(rows):
         if i == r_e:
             max0 = par_dic[idx_par][0]
             r_s = par_dic[idx_par][1]
             r_e = r_s + par_dic[idx_par][2]
             idx_par += 1
+
+        if max0 == 0:
+            continue
 
         s_p = ind_ptr[i]
         e_p = ind_ptr[i + 1]
@@ -590,13 +436,11 @@ class MovingAverage(object):
         self.sum += val * n
         self.count += n
         self.pre_avg = self.cur_avg
-        # self.cur_avg = self.sum / self.count
-        self.cur_avg = val
+        self.cur_avg = self.sum / self.count
         if self.pre_avg == 0:
             self.pre_avg = self.cur_avg
-
         # if self.pre_avg > 4 and abs(self.cur_avg - self.pre_avg) / self.pre_avg >= self.th:
-        # if self.pre_avg > 4 and abs(self.cur_avg - self.pre_avg) >= 4:
+
         if abs(self.cur_avg - self.pre_avg) >= 4:
             return True
         else:
@@ -605,8 +449,42 @@ class MovingAverage(object):
             return False
 
 
+class MovingWindow(object):
+    def __init__(self, th):
+        self.th = th
+        self.min = 64
+        self.max = 0
+        self.count = 0
+
+    def reset(self):
+        self.min = 64
+        self.max = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        if val == 0:
+            self.th = 1
+
+        if self.count > 0 and self.min > 0 and val == 0:
+            return True
+        elif self.count > 0 and abs(val - self.min) >= self.th:
+            self.th = 4
+            return True
+        else:
+            if val < self.min:
+                self.min = val
+
+            if val > self.max:
+                self.max = val
+
+            self.count += n
+            return False
+
+
 def intra_partition(nnz):
-    ave_nnz = MovingAverage(0.15)
+    # ave_nnz = MovingAverage(0.15)
+    ave_nnz = MovingWindow(4)
+
     par_dic = {}
     idx_par = 0
     len_d = len(nnz)
@@ -615,7 +493,7 @@ def intra_partition(nnz):
         nnz_row_i = nnz[i]
         s0 = ave_nnz.update(nnz_row_i)
         if s0:
-            par_dic[idx_par] = [ave_nnz.max, i - ave_nnz.count + 1, ave_nnz.count - 1]
+            par_dic[idx_par] = [ave_nnz.max, i - ave_nnz.count, ave_nnz.count]
             idx_par += 1
             ave_nnz.reset()
             ave_nnz.update(nnz_row_i)
@@ -661,7 +539,7 @@ def inter_partition(s_mat, tile_size):
         par_dics[idx_par] = par
         idx_par += 1
         density, total_nnz = calc_density(par, tile_size)
-        print(f'density in inter_partition is {density} !!!')
+        print(f'density after inter_partition is {density} !!!')
 
         if density > 0.6:
             row_indices_sparse.append(0)
@@ -680,34 +558,4 @@ if __name__ == "__main__":
     r_c = r_a
     c_c = c_b
 
-    mat_a = gen_random_mat_a(r_a, c_a, 0.4)
-    add_val(mat_a)
-
-    # mat_a = gen_random_mat_a1(r_a, c_a, 0.4)
-
-    par_dics = inter_partition(mat_a, 16)
-
-    # write_mat_file0('./mat/a_csr.txt', mat_a, 1)
-    # write_mat_file1('./mat/a.txt', 'w', mat_a, 1)
-
-    # write_mat_file1('./mat/row_fifo0.txt', 'w', mat_a, 1)
-    # write_mat_file_ind_d0('./mat/row_fifo0.txt', mat_a, 1)
-
-    # unroll_loop0('./mat/loop0.txt', mat_a)
-    # unroll_loop1('./mat/loop1.txt', mat_a)
-    # par_dic = unroll_loop2('./mat/loop2.txt', mat_a)
-    # print(par_dic)
-    # ptr_arr, ind_arr, d_arr = write_mat_file2('./mat/a_csr.txt', mat_a, par_dic, 1)
-    # dense = csr_to_dense(ptr_arr, ind_arr, d_arr, r_a, c_a)
-    # compare_mat(dense, mat_a)
-
-    # mat_b = gen_random_mat_b(r_b, c_b)
-    # write_mat_file1('./mat/b0.txt', 'w', mat_b, 1)
-    # write_mat_file1('./mat/b1.txt', 'w', mat_b, 1)
-
-    # write_mat_b_file('./mat/col_fifo0.txt', 'w', mat_b, 1)
-    #
-    # mat_c = gen_mat_c(mat_a, mat_b)
-    # write_mat_file1('./mat/c.txt', 'w', mat_c, 1)
-
-    print('sparse mat finish !!!')
+    mat_a = gen_random_mat_a0(r_a, c_a, 0.4)

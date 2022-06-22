@@ -203,9 +203,6 @@ if __name__ == "__main__":
 
     mat_a = gen_random_mat_a1(r_a, c_a, 0.8)
     mat_b = gen_random_mat_b(r_b, c_b)
-    # mat_a = gen_mat_a(r_a, c_a)
-    # mat_b = gen_mat_b(r_b, c_b)
-
     mat_c = gen_mat_c(mat_a, mat_b)
 
     sys_arr = SystolicTensor(16, 4, tile_size_a, tile_size_b)

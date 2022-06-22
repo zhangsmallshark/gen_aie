@@ -10,9 +10,10 @@ from matplotlib.colors import ListedColormap
 
 import torch
 from torch_geometric.utils import to_undirected
-from torch_geometric.datasets import Planetoid, KarateClub, Reddit, Reddit2, Yelp, AmazonProducts
+from torch_geometric.datasets import Planetoid, Reddit, Reddit2, PPI, Flickr, Yelp, AmazonProducts
 from torch_geometric.transforms import NormalizeFeatures
 
+from estimate_time import estimate_layer_time
 # /home/fpga/Downloads/metis-5.1.0/build/Linux-x86_64/programs/gpmetis
 
 
@@ -209,26 +210,52 @@ def save_partitions(graph, re_root_l, tile_size, base_dir, dataset):
 
 if __name__ == "__main__":
 
-    g_name = 'Cora'
-    num_parts = 8
+    # g_name = 'Cora'
+
+    # g_name = 'CiteSeer'
+
+    # g_name = 'PubMed'
+
+    # g_name = 'PPI'
+
+    g_name = 'Flickr'
+
+    # g_name = 'Yelp'
 
     # g_name = 'Reddit2'
-    # num_parts = 40
-
-    # g_name = 'Reddit2'
-    # num_parts = 40
 
     # g_name = 'Amazon'
-    # num_parts = 60
 
     dataset_root = f'./datasets/{g_name}'
-    base_dir = './graph_mat'
-    tile_size = 64
 
-    dataset = Planetoid(root='./datasets', name=g_name, transform=NormalizeFeatures())
-    # dataset = KarateClub()
-    # dataset = Reddit2(root=dataset_root)
-    # dataset = AmazonProducts(root=dataset_root)
+    if g_name == 'Cora':
+        dataset = Planetoid(root='./datasets', name=g_name, transform=NormalizeFeatures())
+
+    elif g_name == 'CiteSeer':
+        dataset = Planetoid(root='./datasets', name=g_name, transform=NormalizeFeatures())
+
+    elif g_name == 'PubMed':
+        dataset = Planetoid(root='./datasets', name=g_name, transform=NormalizeFeatures())
+        num_parts = 7
+
+    elif g_name == 'PPI':
+        dataset = PPI(root=dataset_root, split='train', transform=None)
+
+    elif g_name == 'Flickr':
+        dataset = Flickr(root=dataset_root, transform=None)
+        num_parts = 28
+
+    elif g_name == 'Yelp':
+        dataset = Yelp(root=dataset_root, transform=None)
+        num_parts = 225
+
+    elif g_name == 'Reddit2':
+        dataset = Reddit2(root=dataset_root)
+        num_parts = 73
+
+    elif g_name == 'Amazon':
+        dataset = AmazonProducts(root=dataset_root)
+        num_parts = 491
 
     print(f'\nDataset: {dataset}:')
     print(f'Number of graphs: {len(dataset)}')
@@ -245,9 +272,36 @@ if __name__ == "__main__":
     print(f'Number of nodes: {num_nodes}')
     print(f'Number of edges: {g0.num_edges}')
 
-    # gen_metis_input(num_nodes, g0, base_dir, g_name)
+    # num_parts = math.ceil(num_nodes / 3200)
+    # print(f'Number of partitions: {num_parts}')
 
-    traversal_order, root_l = gpmetis_clustering(num_nodes, num_parts, base_dir, g_name)
-    re_graph, re_root_l = reordering(traversal_order, root_l, base_dir, g_name)
+    base_dir = './graph_mat'
+    gen_metis_input(num_nodes, g0, base_dir, g_name)
+
+    # traversal_order, root_l = gpmetis_clustering(num_nodes, num_parts, base_dir, g_name)
+    # re_graph, re_root_l = reordering(traversal_order, root_l, base_dir, g_name)
+
+    # h1 = 128
+    # h2 = num_classes
+    # r_a = num_nodes
+    # c_a = num_nodes
+    # c_x = dataset.num_features
+    # c_w = h1
+    # tile_size_a = 64
+    # tile_size_b = 32
+    # tile_size_x = 32
+    # tile_size_w = 32
+    # layer_time1 = estimate_layer_time(r_a, c_a, c_x, c_w, re_root_l, re_graph, tile_size_a, tile_size_b, tile_size_x, tile_size_w)
+
+    # print('\n')
+    # c_x = h1
+    # c_w = h2
+    # layer_time2 = estimate_layer_time(r_a, c_a, c_x, c_w, re_root_l, re_graph, tile_size_a, tile_size_b, tile_size_x, tile_size_w)
+    # model_time = layer_time1 + layer_time2
+
+    # print(f'layer_time1 : {layer_time1} us, layer_time2 {layer_time2} us')
+    # print(f'model time: {model_time} us, {model_time / 1000} ms')
+
     # save_partitions(re_graph, re_root_l, tile_size, base_dir, g_name)
-    show_adj(re_graph, re_root_l, 1)
+    # show_adj(re_graph, re_root_l, 1)
+    print('preprocess finish !!!')

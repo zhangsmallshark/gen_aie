@@ -1,10 +1,9 @@
 import os
 import shutil
 import math
-from sparse_mat import inter_partition, gen_random_mat_a, add_val
 
 
-def gen_settings_h(file_name, tile_size_a, tile_size_b, nnz0, n_rows_PE, n_rows_s_PE, n_cols_PE, iterations, row_indices_sparse):
+def gen_settings_h(file_name, tile_size_a, tile_size_b, nnz0, n_rows_PE, n_rows_s_PE, n_cols_PE, iterations, tile_indices_sparse):
     left_brace = '{'
     right_brace = '}'
 
@@ -37,18 +36,18 @@ def gen_settings_h(file_name, tile_size_a, tile_size_b, nnz0, n_rows_PE, n_rows_
     f.write('// Sparse size\n')
     nnz0_str = [str(i) for i in nnz0]
     f.write(f'constexpr int kNNZ0[N_ROWS_PE] = {left_brace}{", ".join(nnz0_str)}{right_brace};\n')
-    sparse0_str = [str(i) for i in row_indices_sparse]
+    sparse0_str = [str(i) for i in tile_indices_sparse]
     f.write(f'constexpr int kSparse0[N_ROWS_PE] = {left_brace}{", ".join(sparse0_str)}{right_brace};\n')
     f.write('\n')
     f.write(f'#define N_ITERATIONS {iterations}\n')
     f.write('\n')
 
 
-def gen_aie_kernels_h(src0, src1, n_rows_PE, row_indices_sparse):
+def gen_aie_kernels_h(src0, src1, n_rows_PE, tile_indices_sparse):
     shutil.copy(src0, src1)
     f = open(src1, 'a')
     for i in range(n_rows_PE):
-        if row_indices_sparse[i] == 1:
+        if tile_indices_sparse[i] == 1:
             f.write('\n')
             f.write(f'void SparseTensorPE{i}(\n')
             f.write('  input_window_uint8* __restrict left0,\n')
@@ -58,16 +57,17 @@ def gen_aie_kernels_h(src0, src1, n_rows_PE, row_indices_sparse):
             f.write('  output_window_float* __restrict right1,\n')
             f.write('  output_window_float* __restrict down,\n')
             f.write('  output_window_float* __restrict p_mat_c);\n')
+    f.close()
 
 
-def gen_systolic_graph0_func(lines, n_rows_PE, n_cols_PE, row_indices_sparse):
+def gen_systolic_graph0_func(lines, n_rows_PE, n_cols_PE, tile_indices_sparse):
     program = []
     left_brace = '{'
     right_brace = '}'
     space = ' '
     i = 0
     for r in range(n_rows_PE):
-        if row_indices_sparse[r] == 1:
+        if tile_indices_sparse[r] == 1:
             if i == 0:
                 program.append(f'{space*10}if (i == {r}) {left_brace}\n')
                 program.append(f'{space*12}PEs[idx0] = kernel::create(SparseTensorPE{r});\n')
@@ -111,7 +111,7 @@ def gen_systolic_graph0_func(lines, n_rows_PE, n_cols_PE, row_indices_sparse):
                 idx1 += 1
 
             if j == n_cols_PE - 1:
-                if row_indices_sparse[i] == 1:
+                if tile_indices_sparse[i] == 1:
                     connections.append(f'connect< window<kNNZ0[{i}]*N_BYTES_UINT8> > (PEs[{idx0}].out[0], null_outs[{idx1}]);\n')
                     idx1 += 1
                     connections.append(f'connect< window<kNNZ0[{i}]*N_BYTES_FLOAT> > (PEs[{idx0}].out[1], null_outs[{idx1}]);\n')
@@ -138,18 +138,18 @@ def gen_systolic_graph0_func(lines, n_rows_PE, n_cols_PE, row_indices_sparse):
     return lines1
 
 
-def gen_top_graph_func(lines, n_rows_PE, n_cols_PE, row_indices_sparse):
+def gen_top_graph_func(lines, n_rows_PE, n_cols_PE, tile_indices_sparse):
     lines1 = []
     connections0 = []
     connections1 = []
     idx1 = 0
     for i in range(n_rows_PE):
-        if row_indices_sparse[i] == 1:
+        if tile_indices_sparse[i] == 1:
             connections0.append(f'connect < window<kNNZ0[{i}]*N_BYTES_UINT8> > (ins0[{idx1}], g0.row_fifos_i[{idx1}]);\n')
             idx1 += 1
 
     for i in range(n_rows_PE):
-        if row_indices_sparse[i] == 1:
+        if tile_indices_sparse[i] == 1:
             connections0.append(f'connect < window<kNNZ0[{i}]*N_BYTES_FLOAT> > (ins1[{i}], g0.row_fifos_d[{i}]);\n')
         else:
             connections0.append(f'connect < window<N_SAMPLES_WINDOW_A * N_BYTES_FLOAT > > (ins1[{i}], g0.row_fifos_d[{i}]);\n')
@@ -163,7 +163,7 @@ def gen_top_graph_func(lines, n_rows_PE, n_cols_PE, row_indices_sparse):
                 idx1 += 1
 
             if j == n_cols_PE - 1:
-                if row_indices_sparse[i] == 1:
+                if tile_indices_sparse[i] == 1:
                     connections1.append(f'connect < window<kNNZ0[{i}]*N_BYTES_UINT8> > (g0.null_outs[{idx1}], outs1[{idx1}]);\n')
                     idx1 += 1
                     connections1.append(f'connect < window<kNNZ0[{i}]*N_BYTES_FLOAT> > (g0.null_outs[{idx1}], outs1[{idx1}]);\n')
@@ -190,19 +190,19 @@ def gen_top_graph_func(lines, n_rows_PE, n_cols_PE, row_indices_sparse):
     return lines1
 
 
-def gen_graph_h(src0, src1, n_rows_PE, n_cols_PE, row_indices_sparse):
+def gen_graph_h(src0, src1, n_rows_PE, n_cols_PE, tile_indices_sparse):
     f0 = open(src0, 'r')
     lines0 = f0.readlines()
 
-    lines1 = gen_systolic_graph0_func(lines0, n_rows_PE, n_cols_PE, row_indices_sparse)
-    lines1 = gen_top_graph_func(lines1, n_rows_PE, n_cols_PE, row_indices_sparse)
+    lines1 = gen_systolic_graph0_func(lines0, n_rows_PE, n_cols_PE, tile_indices_sparse)
+    lines1 = gen_top_graph_func(lines1, n_rows_PE, n_cols_PE, tile_indices_sparse)
 
     f1 = open(src1, 'w')
     for l in lines1:
         f1.write(l)
 
 
-def gen_graph_cpp(file_name, n_rows_PE, n_rows_s_PE, n_cols_PE, row_indices_sparse):
+def gen_graph_cpp(file_name, n_rows_PE, n_rows_s_PE, n_cols_PE, tile_indices_sparse):
     f = open(file_name, 'w')
     f.write('/*\n')
     f.write('*/\n')
@@ -211,7 +211,7 @@ def gen_graph_cpp(file_name, n_rows_PE, n_rows_s_PE, n_cols_PE, row_indices_spar
     f.write('\n')
     idx0 = 0
     for k in range(n_rows_PE):
-        if row_indices_sparse[k] == 1:
+        if tile_indices_sparse[k] == 1:
             f.write(f'PLIO *in{idx0} = new PLIO("indices{k}", plio_64_bits, "./data/indices{k}.txt");\n')
             idx0 += 1
     e_p = n_rows_s_PE
@@ -288,25 +288,49 @@ def gen_graph_cpp(file_name, n_rows_PE, n_rows_s_PE, n_cols_PE, row_indices_spar
     f.write('#endif\n')
 
 
-def unroll_loop_sparse(par):
+def unroll_loop_sparse0(par, tile_size_b):
     program = []
     left_brace = '{'
     right_brace = '}'
     space = ' '
-    # program.append(f'for (int i = 0; i < 1; i++)\n')
-    # program.append('chess_prepare_for_pipelining\n')
-    # program.append(f'chess_loop_range(1,)\n')
-    # program.append(f'{left_brace}\n')
 
-    col_tiles_A = 4
-    col_tiles_B = 4
-    
+    par_len = par[2]
+    C_B = tile_size_b
+    # col_tiles_B = int(C_B / 8)
+    col_tiles_B = 1
+
+    # program.append(f'{space * 2}acc{1} = null_v8float();\n')
+    program.append(f'{space * 2}acc{1} = null_v32float();\n')
+    for i in range(0, par_len * col_tiles_B):
+        program.append(f'{space * 2}window_writeincr(p_mat_c, acc{1});\n')
+
+    program.append(f'{space * 0}\n')
+
+    return program
+
+
+def unroll_loop_sparse1(par, tile_size_a, tile_size_b):
+    program = []
+    left_brace = '{'
+    right_brace = '}'
+    space = ' '
+
+    R_A = tile_size_a
+    C_A = tile_size_a
+    R_B = C_A
+    C_B = tile_size_b
+    R_C = R_A
+    C_C = C_B
+    col_tiles_B = int(C_B / 8)
+
     loop0 = par[2]
     loop1 = par[0]
-    program.append(f'{space * 2}for (uint8_t i0 = 0; i0 < {loop0}; i0++)\n')
-    program.append(f'{space * 2}chess_prepare_for_pipelining\n')
-    program.append(f'{space * 2}chess_loop_range({loop0},)\n')
-    program.append(f'{space * 2}{left_brace}\n')
+    if loop0 > 1:
+        program.append(f'{space * 2}for (uint8_t i0 = 0; i0 < {loop0}; i0++)\n')
+        program.append(f'{space * 2}chess_prepare_for_pipelining\n')
+        program.append(f'{space * 2}chess_loop_range({loop0},)\n')
+        program.append(f'{space * 2}{left_brace}\n')
+
     program.append(f'{space * 4}num_reads_a = 0;\n')
     program.append(f'{space * 4}for (int i1 = 0; i1 < {col_tiles_B}; i1++)\n')
     program.append(f'{space * 4}chess_prepare_for_pipelining\n')
@@ -332,177 +356,164 @@ def unroll_loop_sparse(par):
     program.append(f'{space * 6}{right_brace}\n')
     program.append(f'{space * 6}window_writeincr(p_mat_c, acc0);\n')
     program.append(f'{space * 6}num_reads_a = {loop1};\n')
-    program.append(f'{space * 6}row_idx_diff1 = R_B - row_idx0_b;\n')
+    program.append(f'{space * 6}row_idx_diff1 = {R_B} - row_idx0_b;\n')
     program.append(f'{space * 6}window_incr_v8(top, row_idx_diff1);\n')
     program.append(f'{space * 4}{right_brace}\n')
-    program.append(f'{space * 4}window_decr_v8(top, R_B * {col_tiles_B});\n')
-    program.append(f'{space * 2}{right_brace}\n\n')
+    program.append(f'{space * 4}window_decr_v8(top, {R_B * col_tiles_B});\n')
 
-    f0 = open('./refer_mat/temp.txt', 'w')
-    for line in program:
-        f0.write(line)
-        # f0.write('\n')
-    f0.close()
+    if loop0 > 1:
+        program.append(f'{space * 2}{right_brace}\n')
 
-    # program.append(f'{right_brace}\n')
+    program.append(f'{space * 0}\n')
 
     return program
 
 
-def unroll_loop_dense(par, s):
+def unroll_loop_dense(par, tile_size_a, tile_size_b):
     program = []
     left_brace = '{'
     right_brace = '}'
     space = ' '
 
-    col_tiles_A = 4
-    col_tiles_B = 4
+    R_B = tile_size_a
+    col_tiles_A = int(tile_size_a / 8)
+    col_tiles_B = int(tile_size_b / 8)
 
+    s = 2 
     max_nnz = [0]
     par_len = par[2]
-
-    program.append(f'{space * 2}v8float buf_mat_b = undef_v8float();\n')
-
-    for i in range(s, par_len):
+    for i in range(s, s + par_len):
         program.append(f'{space * 2}v8float buf_mat_a{i} = undef_v8float();\n')
         program.append(f'{space * 2}v8float acc{i} = null_v8float();\n')
 
-    program.append(f'{space * 2}window_incr_v8(left, num_incr_a);\n')
-    program.append(f'{space * 2}num_decr_a = 0;\n')
-    program.append(f'{space * 2}for (int i1 = 0; i1 < {col_tiles_B}; i1++)')
+    # program.append(f'{space * 2}window_incr_v8(left1, num_incr_a);\n')
+    program.append(f'{space * 2}num_reads_a = 0;\n')
+    program.append(f'{space * 2}for (int i1 = 0; i1 < {col_tiles_B}; i1++)\n')
     program.append(f'{space * 2}chess_prepare_for_pipelining\n')
     program.append(f'{space * 2}chess_loop_range({col_tiles_B},)\n')
     program.append(f'{space * 2}{left_brace}\n')
-
-    for i in range(par_len):
+    for i in range(s, s + par_len):
         program.append(f'{space * 4}acc{i} = null_v8float();\n')
 
-    program.append(f'{space * 4}window_decr_v8(left, num_decr_a);\n')
-    program.append(f'{space * 4}for (int i2 = 0; i2 < {col_tiles_A}; i2++)')
+    program.append(f'{space * 4}window_decr_v8(left1, num_reads_a);\n')
+    program.append(f'{space * 4}for (int i2 = 0; i2 < {col_tiles_A}; i2++)\n')
     program.append(f'{space * 4}chess_prepare_for_pipelining\n')
     program.append(f'{space * 4}chess_loop_range({col_tiles_A},)\n')
     program.append(f'{space * 4}{left_brace}\n')
-
-    for i in range(par_len):
-        program.append(f'{space * 6}buf_mat_a{i} = window_readincr_v8(left);\n')
+    for i in range(s, s + par_len):
+        program.append(f'{space * 6}buf_mat_a{i} = window_readincr_v8(left1);\n')
 
     program.append(f'{space * 6}for (int i3 = 0; i3 < 8; i3++)\n')
     program.append(f'{space * 6}chess_prepare_for_pipelining\n')
-    program.append(f'{space * 6}chess_loop_range(8, 8)\n')
+    program.append(f'{space * 6}chess_loop_range(8,)\n')
     program.append(f'{space * 6}chess_flatten_loop\n')
     program.append(f'{space * 6}{left_brace}\n')
     program.append(f'{space * 8}buf_mat_b = window_readincr_v8(top);\n')
-    for i in range(par_len):
+    for i in range(s, s + par_len):
         program.append(f'{space * 8}acc{i} = fpmac(acc{i}, xset_w(0, buf_mat_a{i}), i3, 0x00000000, buf_mat_b, 0, 0x76543210);\n')
 
     program.append(f'{space * 6}{right_brace}\n')
     program.append(f'{space * 4}{right_brace}\n')
+    for i in range(s, s + par_len):
+        program.append(f'{space * 4}window_writeincr(p_mat_c, acc{i});\n')
 
-    program.append(f'{space * 2}window_incr_v8(p_mat_c, {col_tiles_B});\n')
-    program.append(f'{space * 2}window_write(p_mat_c, acc1);\n')
-    program.append(f'{space * 2}window_decr_v8(p_mat_c, {col_tiles_B});\n')
-    program.append(f'{space * 2}window_writeincr(p_mat_c, acc0);\n')
-    program.append(f'{space * 2}num_decr_a = {col_tiles_A};\n')
+    program.append(f'{space * 4}num_reads_a = {col_tiles_A * par_len};\n')
+    program.append(f'{space * 2}{right_brace}\n')
+    program.append(f'{space * 2}window_decr_v8(top,{R_B * col_tiles_B});\n\n')
 
-    program.append(f'{space * 2}{right_brace}\n\n')
-    program.append(f'{space * 2}num_incr_a = {col_tiles_A};\n')
-    program.append(f'{space * 2}window_decr_v8(top, R_B * {col_tiles_B});\n')
-    program.append(f'{space * 2}{right_brace}\n\n')
-
-    f0 = open('./refer_mat/temp.txt', 'w')
-    for line in program:
-        f0.write(line)
-        # f0.write('\n')
-    f0.close()
+    return program
 
 
-def gen_sparse_PE(src_file, dst_dir, par_dics, nnz0, row_indices_sparse):
-    f0 = open(src_file, 'r')
-    lines0 = f0.readlines()
+def gen_sparse_PE(dst_dir, tile_size_a, tile_size_b, par_dics, nnzs_tiles, tile_indices_sparse):
+    left_brace = '{'
+    right_brace = '}'
+    space = ' '
 
-    for i, l in enumerate(lines0):
-        if l.startswith('// begin0'):
-            s_p0 = i
-
-        if l.startswith('// end0'):
-            e_p0 = i
-
-        if l.startswith('// begin1'):
-            s_p1 = i
-
-        if l.startswith('// end1'):
-            e_p1 = i
+    R_A = tile_size_a
+    C_A = tile_size_a
+    R_B = C_A
+    C_B = tile_size_b
+    R_C = R_A
+    C_C = C_B
+    n_reads_top = int((R_B * C_B) / 32)
 
     base_name = 'sparse_tensor_PE'
-    rows = len(row_indices_sparse)
-    for i in range(rows):
-        if row_indices_sparse[i] == 1:
-            par = par_dics[i]
-            lines1 = []
-            lines1.extend(lines0[0:s_p0])
-            lines1.append(f'constexpr int kNNZLeft = {nnz0[i]};\n\n')
-            lines1.append(f'void SparseTensorPE{i}(\n')
-            lines1.extend(lines0[e_p0+1:s_p1])
-            program = unroll_loop_sparse(par)
-            lines1.extend(program)
-            lines1.extend(lines0[e_p1+1:])
+    tiles = len(tile_indices_sparse)
+    for i in range(tiles):
+        if tile_indices_sparse[i] == 1:
+            par_dic = par_dics[i]
+            nnz_left = nnzs_tiles[i]
+            n_reads_left = int(nnz_left / 16)
+            lines0 = []
+            lines0.append(f'{space * 0}/*\n')
+            lines0.append(f'{space * 0}left0: indices\n')
+            lines0.append(f'{space * 0}left1: data\n')
+            lines0.append(f'{space * 0}top: mat_b\n')
+            lines0.append(f'{space * 0}*/\n')
+            lines0.append(f'{space * 0}\n')
+            lines0.append(f'{space * 0}#include <adf.h>\n')
+            lines0.append(f'{space * 0}#include <cstdint>\n')
+            lines0.append(f'{space * 0}#include "system_settings.h"\n')
+            lines0.append(f'{space * 0}\n')
+            lines0.append(f'{space * 0}void SparseTensorPE{i}(\n')
+            lines0.append(f'{space * 2}input_window_uint8* __restrict left0,\n')
+            lines0.append(f'{space * 2}input_window_float* __restrict left1,\n')
+            lines0.append(f'{space * 2}input_window_float* __restrict top,\n')
+            lines0.append(f'{space * 2}output_window_uint8* __restrict right0,\n')
+            lines0.append(f'{space * 2}output_window_float* __restrict right1,\n')
+            lines0.append(f'{space * 2}output_window_float* __restrict down,\n')
+            lines0.append(f'{space * 2}output_window_float* __restrict p_mat_c)\n')
+            lines0.append(f'{space * 0}{left_brace}\n')
+            lines0.append(f'{space * 2}v16uint8 buf_right0 = undef_v16uint8();\n')
+            lines0.append(f'{space * 2}v16float buf_right1 = undef_v16float();\n')
+            lines0.append(f'{space * 2}v32float buf_down = undef_v32float();\n')
+            lines0.append(f'{space * 2}for (uint8_t i0 = 0; i0 < {n_reads_left}; i0++)\n')
+            lines0.append(f'{space * 2}chess_prepare_for_pipelining\n')
+            lines0.append(f'{space * 2}chess_loop_range({n_reads_left},)\n')
+            lines0.append(f'{space * 2}{left_brace}\n')
+            lines0.append(f'{space * 4}buf_right0 = window_readincr_v16(left0);\n')
+            lines0.append(f'{space * 4}buf_right1 = window_readincr_v16(left1);\n')
+            lines0.append(f'{space * 4}window_writeincr(right0, buf_right0);\n')
+            lines0.append(f'{space * 4}window_writeincr(right1, buf_right1);\n')
+            lines0.append(f'{space * 2}{right_brace}\n')
+            lines0.append(f'{space * 2}window_decr_v16(left0, {n_reads_left});\n')
+            lines0.append(f'{space * 2}window_decr_v16(left1, {n_reads_left});\n')
+            lines0.append(f'{space * 2}for (uint8_t i0 = 0; i0 < {n_reads_top}; i0++)\n')
+            lines0.append(f'{space * 2}chess_prepare_for_pipelining\n')
+            lines0.append(f'{space * 2}chess_loop_range({n_reads_top},)\n')
+            lines0.append(f'{space * 2}{left_brace}\n')
+            lines0.append(f'{space * 4}buf_down = window_readincr_v32(top);\n')
+            lines0.append(f'{space * 4}window_writeincr(down, buf_down);\n')    
+            lines0.append(f'{space * 2}{right_brace}\n')
+            lines0.append(f'{space * 2}window_decr_v32(top, {n_reads_top});\n')
+            lines0.append(f'{space * 2}v8float buf_mat_a = null_v8float();\n')
+            lines0.append(f'{space * 2}v8float buf_mat_b = undef_v8float();\n')
+            lines0.append(f'{space * 2}v8float acc0 = null_v8float();\n')
+            lines0.append(f'{space * 2}v32float acc1 = null_v32float();\n')
+            lines0.append(f'{space * 2}float val = 0.0;\n')
+            lines0.append(f'{space * 2}int row_idx0_b = 0;\n')
+            lines0.append(f'{space * 2}int row_idx1_b = 0;\n')
+            lines0.append(f'{space * 2}int row_idx_diff0 = 0;\n')
+            lines0.append(f'{space * 2}int row_idx_diff1 = 0;\n')
+            lines0.append(f'{space * 2}int num_reads_a = 0;\n')
 
+            lines0.append(f'{space * 0}\n')
+
+            for par in par_dic.values():
+                if par[0] == 0:
+                    program = unroll_loop_sparse0(par, tile_size_b)
+                elif 0 < par[0] < int(C_A * 1.5):
+                    program = unroll_loop_sparse1(par, tile_size_a, tile_size_b)
+                else:
+                    program = unroll_loop_dense(par, tile_size_a, tile_size_b)
+
+                lines0.extend(program)
+            lines0.append(f'{space * 0}{right_brace}\n')
             dst_file = f'{dst_dir}/{base_name}{i}.cpp'
             f1 = open(dst_file, 'w')
-            for l in lines1:
+            for l in lines0:
                 f1.write(l)
 
 
 if __name__ == "__main__":
-    # r_a = 64
-    # c_a = 64
-    # r_b = c_a
-    # c_b = 16
-    # r_c = r_a
-    # c_c = c_b
-    # tile_size = 16
-    # density0 = 0.4
-    # mat_a = gen_random_mat_a(r_a, c_a, density0)
-    # add_val(mat_a)
-    #
-    # par_dics, row_indices_s, nnz0 = inter_partition(mat_a, tile_size)
-    # # row_indices_s = [1, 0, 0, 1]
-    #
-    # n_rows_PE = int(r_a / tile_size)
-    # n_rows_s_PE = sum(row_indices_s)
-    # n_cols_PE = int(c_b / tile_size)
-    #
-    # settings_h = '/home/fpga/Desktop/systolic_array/systolic/src/system_settings.h'
-    # gen_settings_h(settings_h, tile_size, tile_size, nnz0, n_rows_PE, n_rows_s_PE, n_cols_PE, int(c_a/tile_size), row_indices_s)
-    #
-    # o_aie_kernels_h = './aie_src/aie_kernels.h'
-    # n_aie_kernels_h = '/home/fpga/Desktop/systolic_array/systolic/src/aie_kernels.h'
-    # gen_aie_kernels_h(o_aie_kernels_h, n_aie_kernels_h, n_rows_PE, row_indices_s)
-    #
-    # if n_rows_s_PE > 0:
-    #     o_graph_h = './aie_src/graph_sparse.h'
-    # else:
-    #     o_graph_h = './aie_src/graph_dense.h'
-    #
-    # n_graph_h = '/home/fpga/Desktop/systolic_array/systolic/src/graph.h'
-    # gen_graph_h(o_graph_h, n_graph_h, n_rows_PE, n_cols_PE, row_indices_s)
-    #
-    # graph_cpp = '/home/fpga/Desktop/systolic_array/systolic/src/graph.cpp'
-    # gen_graph_cpp(graph_cpp, n_rows_PE, n_rows_s_PE, n_cols_PE, row_indices_s)
-    #
-    # o_sparse_tensor_PE_cpp = './aie_src/sparse_tensor_PE.cpp'
-    # dst_dir = '/home/fpga/Desktop/systolic_array/systolic/src/aie_kernels'
-    # gen_sparse_PE(o_sparse_tensor_PE_cpp, dst_dir, par_dics, 16, row_indices_s)
-
-    unroll_loop_sparse([10, 1, 5])
-    # unroll_loop_dense([10, 1, 5], 0)
-
-    print('gen_aie_files finish !!!')
-
-
-
-
-
-
-
-
+    print('finish')

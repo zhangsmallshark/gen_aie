@@ -21,49 +21,7 @@ def reshape_a(mat, tile_size):
     return arr0
 
 
-
-
-base_name = 'sparse_tensor_PE'
-rows = len(row_indices_sparse)
-for i in range(rows):
-    if row_indices_sparse[i] == 1:
-        par = par_dics[i]
-        lines1 = []
-        lines1.extend(lines0[0:s_p0])
-        lines1.append(f'constexpr int kNNZLeft = {nnz0[i]};\n\n')
-        lines1.append(f'void SparseTensorPE{i}(\n')
-        lines1.extend(lines0[e_p0+1:s_p1])
-        program = unroll_loop_sparse(par)
-        lines1.extend(program)
-        lines1.extend(lines0[e_p1+1:])
-
-        dst_file = f'{dst_dir}/{base_name}{i}.cpp'
-        f1 = open(dst_file, 'w')
-        for l in lines1:
-            f1.write(l)
-
-
-base_name = 'sparse_tensor_PE'
-rows = len(row_indices_sparse)
-for i in range(rows):
-    if row_indices_sparse[i] == 1:
-        par = par_dics[i]
-
-        s_r = par[1]
-        e_r = par[1] + par[2]
-
-        p_mat = mat[s_r:e_r, s_c:e_c]
-
-        row_indices, col_indices = np.nonzero(mat_a)
-        u_col_indices = np.unique(col_indices)
-
-        
-
-
-
-
-
-def gen_row_fifos(mat, par_dics, tile_size, row_indices_s, dst_dir):
+def gen_row_fifos(mat, par_dics, tile_size, tile_indices_sparse, dst_dir):
     r_a, c_a = mat.shape
     row_tiles = int(r_a / tile_size)
     col_tiles = int(c_a / tile_size)
@@ -77,7 +35,7 @@ def gen_row_fifos(mat, par_dics, tile_size, row_indices_s, dst_dir):
             e_c = tile_size * (j + 1)
             p_mat = mat[s_r:e_r, s_c:e_c]
 
-            if row_indices_s[i] == 1:
+            if tile_indices_sparse[i] == 1:
                 indices_name = f'{dst_dir}/indices{i}.txt'
                 write_mat_file_ind_d0(p_mat, 'w', f'{dst_dir}/indices_v.txt', f'{dst_dir}/row_fifo_v.txt')
                 if j == 0:
@@ -121,6 +79,3 @@ def read_pad_adj(mat, tile_size):
     arr0 = np.zeros((row_tiles*tile_size, col_tiles*tile_size))
     arr0[0:r_a, 0:c_a] = mat[:, :]
     return arr0
-
-
-
